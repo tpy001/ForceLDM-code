@@ -1,5 +1,7 @@
 # openpi
 
+> forceWAM / ForceLDM 数据与环境复现：见 [README_REPRODUCE.md](README_REPRODUCE.md)。
+
 openpi holds open-source models and packages for robotics, published by the [Physical Intelligence team](https://www.physicalintelligence.company/).
 
 Currently, this repo contains three types of models:

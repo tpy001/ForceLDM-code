@@ -743,7 +743,7 @@ _CONFIGS = [
             # This multiview config expects both
             # `observation.future_flow.base_0_rgb` and
             # `observation.future_flow.left_wrist_0_rgb` in the dataset.
-            repo_id="llly/all_0409_stage_flow", # Placeholder, replace with your actual repo_id
+            repo_id="PeiYuan001/forceldm-dataset",
             effort_history=tuple(list((4 * i - 36 for i in range(10))) + list(range(1, 33))),
             base_config=DataConfig(
                 prompt_from_task=True,

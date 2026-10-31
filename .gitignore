@@ -173,3 +173,6 @@ test_scripts/
 AtomicVLA/
 env/
 results/
+
+# Local reproduction tools, logs and environment snapshots
+.repro/
