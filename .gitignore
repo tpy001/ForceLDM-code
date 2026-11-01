@@ -176,3 +176,6 @@ results/
 
 # Local reproduction tools, logs and environment snapshots
 .repro/
+
+# Local reproduction notes
+/README_REPRODUCE.md
