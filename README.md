@@ -3,7 +3,7 @@
 <p align="center">
   <a href="https://tpy001.github.io/ForceLDM/"><img src="https://img.shields.io/badge/Project-Page-3273DC?logo=googlechrome&amp;logoColor=white" alt="ForceLDM project page"></a>
   <a href="https://huggingface.co/datasets/PeiYuan001/forceldm-dataset"><img src="https://img.shields.io/badge/Data-Hugging%20Face-FFD21E?logo=huggingface&amp;logoColor=black" alt="Data on Hugging Face"></a>
-  <a href="https://github.com/tpy001/forcewam-275ab3be/tree/forceldm"><img src="https://img.shields.io/badge/Code-GitHub-181717?logo=github&amp;logoColor=white" alt="Code on GitHub"></a>
+  <a href="https://github.com/tpy001/ForceLDM-code/tree/forceldm"><img src="https://img.shields.io/badge/Code-GitHub-181717?logo=github&amp;logoColor=white" alt="Code on GitHub"></a>
   <!-- Add the arXiv URL here when the paper is available. -->
   <img src="https://img.shields.io/badge/arXiv-Coming%20soon-B31B1B?logo=arxiv&amp;logoColor=white" alt="arXiv paper coming soon" title="Paper link coming soon">
 </p>
@@ -15,8 +15,8 @@ A pi0-based student–teacher policy built on [openpi](https://github.com/Physic
 Use Linux, an NVIDIA GPU, and Python 3.11–3.12. Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then:
 
 ```bash
-git clone --branch forceldm https://github.com/tpy001/forcewam-275ab3be.git
-cd forcewam-275ab3be
+git clone --branch forceldm https://github.com/tpy001/ForceLDM-code.git
+cd ForceLDM-code
 sudo apt-get install -y ffmpeg libgl1 libegl1 libglib2.0-0
 GIT_LFS_SKIP_SMUDGE=1 uv sync --locked --python 3.12
 source .venv/bin/activate
