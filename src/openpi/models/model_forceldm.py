@@ -111,10 +111,6 @@ class Observation(Generic[ArrayT]):
     flow_img: at.Float[ArrayT, "*b h w c"] | None = None
     # Optional wrist flow image, in [-1, 1] float32.
     wrist_flow_img: at.Float[ArrayT, "*b h w c"] | None = None
-    # Optional future RGB image aligned with a selected action step.
-    future_rgb_img: at.Float[ArrayT, "*b h w c"] | None = None
-    # Optional future wrist RGB image aligned with a selected action step.
-    future_wrist_rgb_img: at.Float[ArrayT, "*b h w c"] | None = None
     
     # Tokenized prompt.
     tokenized_prompt: at.Int[ArrayT, "*b l"] | None = None
@@ -142,7 +138,7 @@ class Observation(Generic[ArrayT]):
                 data["image"][key] = data["image"][key].astype(np.float32) / 255.0 * 2.0 - 1.0
             elif hasattr(data["image"][key], "dtype") and data["image"][key].dtype == torch.uint8:
                 data["image"][key] = data["image"][key].to(torch.float32).permute(0, 3, 1, 2) / 255.0 * 2.0 - 1.0
-        for aux_image_key in ("flow_img", "wrist_flow_img", "future_rgb_img", "future_wrist_rgb_img"):
+        for aux_image_key in ("flow_img", "wrist_flow_img"):
             if aux_image_key in data:
                 if data[aux_image_key].dtype == np.uint8:
                     data[aux_image_key] = data[aux_image_key].astype(np.float32) / 255.0 * 2.0 - 1.0
@@ -155,8 +151,6 @@ class Observation(Generic[ArrayT]):
             effort=data.get("effort", None),
             flow_img=data.get("flow_img"),
             wrist_flow_img=data.get("wrist_flow_img"),
-            future_rgb_img=data.get("future_rgb_img"),
-            future_wrist_rgb_img=data.get("future_wrist_rgb_img"),
             tokenized_prompt=data.get("tokenized_prompt"),
             tokenized_prompt_mask=data.get("tokenized_prompt_mask"),
             token_ar_mask=data.get("token_ar_mask"),
@@ -260,8 +254,6 @@ def preprocess_observation(
         effort=effort,
         flow_img=observation.flow_img,
         wrist_flow_img=observation.wrist_flow_img,
-        future_rgb_img=observation.future_rgb_img,
-        future_wrist_rgb_img=observation.future_wrist_rgb_img,
         tokenized_prompt=observation.tokenized_prompt,
         tokenized_prompt_mask=observation.tokenized_prompt_mask,
         token_ar_mask=observation.token_ar_mask,

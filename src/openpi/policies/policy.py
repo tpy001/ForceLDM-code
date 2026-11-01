@@ -15,7 +15,7 @@ from typing_extensions import override
 
 from openpi import transforms as _transforms
 from openpi.models import model as _model
-from openpi.models import model_tavla as _model_tavla
+from openpi.models import model_forceldm as _model_forceldm
 from openpi.shared import array_typing as at
 from openpi.shared import nnx_utils
 
@@ -90,7 +90,7 @@ class Policy(BasePolicy):
             sample_kwargs["noise"] = noise
         
         if "effort" in inputs.keys():
-            observation = _model_tavla.Observation.from_dict(inputs)
+            observation = _model_forceldm.Observation.from_dict(inputs)
         else:
             observation = _model.Observation.from_dict(inputs)
         start_time = time.monotonic()

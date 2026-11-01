@@ -5,6 +5,7 @@ import numpy as np
 
 from openpi import transforms
 from openpi.models import model as _model
+from openpi.models import model_forceldm as _model_forceldm
 
 
 def make_yuanluo_example() -> dict:
@@ -41,35 +42,29 @@ class YuanluoInputs(transforms.DataTransformFn):
     # Do not change this for your own dataset.
     model_type: _model.ModelType
     state_dim: int = 7
+    # Model image slot -> camera field in the dataset / inference observation.
+    camera_mapping: dict[str, str] = dataclasses.field(
+        default_factory=lambda: {
+            "base_0_rgb": "observation.images.head_camera",
+            "left_wrist_0_rgb": "observation.images.wrist_left_camera",
+        }
+    )
+
+    def __post_init__(self):
+        if not self.camera_mapping or not set(self.camera_mapping).issubset(_model_forceldm.IMAGE_KEYS):
+            raise ValueError(f"camera_mapping must use model image slots from {_model_forceldm.IMAGE_KEYS}.")
 
     def __call__(self, data: dict) -> dict:
-        # Parse images to uint8 (H,W,C)
-        front_camera_image = _parse_image(data["observation.images.head_camera"])
-        left_wrist_camera_image = _parse_image(data["observation.images.wrist_left_camera"])
-        # gelsight_left_image = _parse_image(data["observation.images.gelsight_left"])
-        # gelsight_right_image = _parse_image(data["observation/gelsight_right"])
+        images = {}
+        for image_key, camera_key in self.camera_mapping.items():
+            if camera_key not in data:
+                raise ValueError(f"Configured camera `{camera_key}` for `{image_key}` is missing.")
+            images[image_key] = _parse_image(data[camera_key])
 
-        # Create inputs dict. Do not change the keys in the dict below.
         inputs = {
             "state": data["observation.state"][:self.state_dim],
-            "image": {
-                "base_0_rgb": front_camera_image,
-                "left_wrist_0_rgb": left_wrist_camera_image,
-                # Pad any non-existent images with zero-arrays of the appropriate shape.
-                # "right_wrist_0_rgb": gelsight_left_image, #np.zeros_like(left_wrist_camera_image),
-                # "right_wrist_0_rgb": np.zeros_like(left_wrist_camera_image), # without Gelsight
-                # "right_wrist_0_rgb": gelsight_left_image, # with gelsight
-                # "gelsight_left_rgb": gelsight_left_image,
-                # "gelsight_right_rgb": gelsight_right_image,
-            },
-            "image_mask": {
-                "base_0_rgb": np.True_,
-                "left_wrist_0_rgb": np.True_,
-                # We only mask padding images for pi0 model, not pi0-FAST. Do not change this for your own dataset.
-                # "right_wrist_0_rgb": np.True_ if self.model_type == _model.ModelType.PI0_FAST else np.False_, # without gelsight
-                # "right_wrist_0_rgb": np.True_, # # with gelsight
-                # "gelsight_right_rgb": np.True_,
-            },
+            "image": images,
+            "image_mask": {key: np.True_ for key in images},
         }
         if "observation.images.future_flow" in data:
             inputs["flow_img"] = _parse_image(data["observation.images.future_flow"])
@@ -103,60 +98,10 @@ class YuanluoOutputs(transforms.DataTransformFn):
     
 
 @dataclasses.dataclass(frozen=True)
-class YuanluoTaVLAInputs(YuanluoInputs):
-    use_future_rgb_instead_of_flow: bool = False
-
-    def _split_camera_stream(
-        self,
-        camera,
-        *,
-        camera_name: str,
-        require_future_frame: bool,
-    ) -> tuple[np.ndarray, np.ndarray | None]:
-        camera = np.asarray(camera)
-        if not self.use_future_rgb_instead_of_flow:
-            return _parse_image(camera), None
-
-        if camera.ndim < 4:
-            if require_future_frame:
-                raise ValueError(
-                    f"YuanluoTaVLAInputs expected `{camera_name}` to contain "
-                    "current and future frames when `use_future_rgb_instead_of_flow=True`."
-                )
-            return _parse_image(camera), None
-
-        if camera.shape[0] < 2:
-            if require_future_frame:
-                raise ValueError(
-                    f"YuanluoTaVLAInputs expected `{camera_name}` to contain "
-                    "current and future frames when `use_future_rgb_instead_of_flow=True`."
-                )
-            return _parse_image(camera[0]), None
-
-        current_frame = _parse_image(camera[0])
-        future_frame = _parse_image(camera[1])
-        return current_frame, future_frame
-
+class ForceLDMInputs(YuanluoInputs):
     def __call__(self, data: dict) -> dict:
-        current_head_camera, future_rgb_img = self._split_camera_stream(
-            data["observation.images.head_camera"],
-            camera_name="observation.images.head_camera",
-            require_future_frame="action" in data,
-        )
-        current_wrist_camera, future_wrist_rgb_img = self._split_camera_stream(
-            data["observation.images.wrist_left_camera"],
-            camera_name="observation.images.wrist_left_camera",
-            require_future_frame="action" in data,
-        )
-        data = dict(data)
-        data["observation.images.head_camera"] = current_head_camera
-        data["observation.images.wrist_left_camera"] = current_wrist_camera
         inputs = super().__call__(data)
         inputs["effort"] = data["observation.effort"] # Append 6-axis force sensor data 
-        if future_rgb_img is not None:
-            inputs["future_rgb_img"] = future_rgb_img
-        if future_wrist_rgb_img is not None:
-            inputs["future_wrist_rgb_img"] = future_wrist_rgb_img
         if "observation.images.future_flow" in data:
             inputs["flow_img"] = _parse_image(data["observation.images.future_flow"])
         if "observation.images.future_wrist_flow" in data:
@@ -168,5 +113,5 @@ class YuanluoTaVLAInputs(YuanluoInputs):
         return inputs
 
 @dataclasses.dataclass(frozen=True)
-class YuanluoTaVLAOutputs(YuanluoOutputs):
+class ForceLDMOutputs(YuanluoOutputs):
     pass

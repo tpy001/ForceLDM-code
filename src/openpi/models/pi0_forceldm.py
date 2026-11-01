@@ -6,10 +6,10 @@ import jax
 import jax.numpy as jnp
 
 from openpi.models import gemma as _gemma
-from openpi.models import model_tavla as _model
+from openpi.models import model_forceldm as _model
 from openpi.models import pi0_config
 from openpi.models import siglip as _siglip
-from openpi.models.pi0_tavla import make_attn_mask, posemb_sincos
+from openpi.models.pi0 import make_attn_mask, posemb_sincos
 from openpi.shared import array_typing as at
 from openpi.shared.effort_type import EffortType
 
@@ -41,16 +41,16 @@ def _get_flow_vae(model_name: str) -> tuple[FlaxAutoencoderKL, at.Params]:
     return _FLOW_VAE_REGISTRY[model_name]
 
 
-class Pi0LatentFlow(_model.BaseModel):
+class Pi0ForceLDM(_model.BaseModel):
     """Standalone dual-expert model with future-force and future-flow alignment."""
 
-    def __init__(self, config: pi0_config.Pi0LatentFlowConfig, rngs: nnx.Rngs):
+    def __init__(self, config: pi0_config.Pi0ForceLDMConfig, rngs: nnx.Rngs):
         super().__init__(config.action_dim, config.action_horizon, config.max_token_len)
         effort_dim_in = getattr(config, "effort_dim_in", None)
         if effort_dim_in is None:
             effort_dim_in = config.effort_dim
         if effort_dim_in is None or int(effort_dim_in) <= 0:
-            raise ValueError("Pi0MORDualAlignForceFlow requires a positive `effort_dim_in`.")
+            raise ValueError("Pi0ForceLDM requires a positive `effort_dim_in`.")
 
         self.effort_dim_in = int(effort_dim_in)
         self.effort_dim = int(config.effort_dim if config.effort_dim is not None else self.effort_dim_in)
@@ -66,8 +66,6 @@ class Pi0LatentFlow(_model.BaseModel):
         self.flow_token_count = int(config.flow_token_count)
         self.future_flow_channels = 3
         self.flow_vae_name = getattr(config, "flow_vae_name", "stabilityai/sdxl-vae")
-        self.use_future_rgb_instead_of_flow = bool(config.use_future_rgb_instead_of_flow)
-        self.future_rgb_step = int(config.future_rgb_step)
         self.student_future_query_noise_scale_max = float(config.student_future_query_noise_scale_max)
         self.student_future_query_noise_start_ratio = float(config.student_future_query_noise_start_ratio)
         self.student_future_query_noise_end_ratio = float(config.student_future_query_noise_end_ratio)
@@ -204,7 +202,7 @@ class Pi0LatentFlow(_model.BaseModel):
         if effort.shape[1] >= steps:
             return effort[:, -steps:, :] if from_end else effort[:, :steps, :]
         if effort.shape[1] == 0:
-            raise ValueError("Pi0MORDualAlignForceFlow received an empty effort sequence.")
+            raise ValueError("Pi0ForceLDM received an empty effort sequence.")
         pad_source = effort[:, :1, :] if from_end else effort[:, -1:, :]
         pad = jnp.repeat(pad_source, steps - effort.shape[1], axis=1)
         return jnp.concatenate([pad, effort], axis=1) if from_end else jnp.concatenate([effort, pad], axis=1)
@@ -217,7 +215,7 @@ class Pi0LatentFlow(_model.BaseModel):
         dtype: at.DTypeLike,
     ) -> tuple[at.Float[at.Array, "b h e"], at.Float[at.Array, "b f e"] | None]:
         if observation.effort is None:
-            raise ValueError("Pi0MORDualAlignForceFlow requires `observation.effort`.")
+            raise ValueError("Pi0ForceLDM requires `observation.effort`.")
         effort = jnp.asarray(observation.effort, dtype=dtype)
         if effort.ndim != 3:
             raise ValueError(f"Expected effort with shape [B, T, D], got {effort.shape}.")
@@ -467,18 +465,12 @@ class Pi0LatentFlow(_model.BaseModel):
         processed: _model.Observation,
         original_flow_img: at.Array | None,
         original_wrist_flow_img: at.Array | None,
-        original_future_rgb_img: at.Array | None,
-        original_future_wrist_rgb_img: at.Array | None,
     ) -> _model.Observation:
         updates = {}
         if original_flow_img is not None:
             updates["flow_img"] = original_flow_img
         if original_wrist_flow_img is not None:
             updates["wrist_flow_img"] = original_wrist_flow_img
-        if original_future_rgb_img is not None:
-            updates["future_rgb_img"] = original_future_rgb_img
-        if original_future_wrist_rgb_img is not None:
-            updates["future_wrist_rgb_img"] = original_future_wrist_rgb_img
         if not updates:
             return processed
         return processed.replace(**updates)
@@ -491,23 +483,10 @@ class Pi0LatentFlow(_model.BaseModel):
         mode_name: str,
     ) -> at.Array:
         if image is None:
-            raise ValueError(f"Pi0LatentFlow requires `{field_name}` for {mode_name}.")
+            raise ValueError(f"Pi0ForceLDM requires `{field_name}` for {mode_name}.")
         return image
 
     def _get_future_visual_images(self, obs: _model.Observation) -> tuple[at.Array, at.Array]:
-        if self.use_future_rgb_instead_of_flow:
-            return (
-                self._require_aux_image(
-                    obs.future_rgb_img,
-                    field_name="observation.future_rgb_img",
-                    mode_name="RGB ablation when `use_future_rgb_instead_of_flow=True`",
-                ),
-                self._require_aux_image(
-                    obs.future_wrist_rgb_img,
-                    field_name="observation.future_wrist_rgb_img",
-                    mode_name="RGB ablation when `use_future_rgb_instead_of_flow=True`",
-                ),
-            )
         return (
             self._require_aux_image(
                 obs.flow_img,
@@ -734,8 +713,6 @@ class Pi0LatentFlow(_model.BaseModel):
         preprocess_rng, noise_rng, time_rng, query_noise_rng = jax.random.split(rng, 4)
         original_flow_img = observation.flow_img
         original_wrist_flow_img = observation.wrist_flow_img
-        original_future_rgb_img = observation.future_rgb_img
-        original_future_wrist_rgb_img = observation.future_wrist_rgb_img
         observation = _model.preprocess_observation(
             preprocess_rng, observation, train=train, effort_type=self.effort_type
         )
@@ -743,12 +720,10 @@ class Pi0LatentFlow(_model.BaseModel):
             observation,
             original_flow_img,
             original_wrist_flow_img,
-            original_future_rgb_img,
-            original_future_wrist_rgb_img,
         )
         history_effort, future_effort = self._split_effort(observation, require_future=True, dtype=actions.dtype)
         if future_effort is None:
-            raise ValueError("Pi0MORDualAlignForceFlow teacher training requires future effort.")
+            raise ValueError("Pi0ForceLDM teacher training requires future effort.")
 
         batch_shape = actions.shape[:-2]
         noise = jax.random.normal(noise_rng, actions.shape)
@@ -868,15 +843,11 @@ class Pi0LatentFlow(_model.BaseModel):
     ) -> _model.Actions:
         original_flow_img = observation.flow_img
         original_wrist_flow_img = observation.wrist_flow_img
-        original_future_rgb_img = observation.future_rgb_img
-        original_future_wrist_rgb_img = observation.future_wrist_rgb_img
         observation = _model.preprocess_observation(None, observation, train=False, effort_type=self.effort_type)
         observation = self._restore_aux_images(
             observation,
             original_flow_img,
             original_wrist_flow_img,
-            original_future_rgb_img,
-            original_future_wrist_rgb_img,
         )
         history_effort, _ = self._split_effort(observation, require_future=False, dtype=jnp.float32)
 

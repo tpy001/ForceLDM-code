@@ -13,7 +13,6 @@ import flax.nnx as nnx
 from typing_extensions import override
 import tyro
 import math
-import openpi.policies.libero_policy as libero_policy
 
 import openpi.models.model as _model
 import openpi.models.pi0_config as pi0_config
@@ -91,11 +90,6 @@ class DataConfig:
     # If true, will use the LeRobot dataset task to define the prompt.
     prompt_from_task: bool = False
 
-    # Only used for RLDS data loader (ie currently only used for DROID).
-    rlds_data_dir: str | None = None
-    # Action space for DROID dataset.
-    # Path to the data filter file for DROID dataset
-    filter_dict_path: str | None = None
 
 
 class GroupFactory(Protocol):
@@ -210,156 +204,25 @@ class FakeDataConfig(DataConfigFactory):
 
 
 
-@dataclasses.dataclass(frozen=True)
-class LeRobotLiberoDataConfig(DataConfigFactory):
-    """
-    This config is used to configure transforms that are applied at various parts of the data pipeline.
-    For your own dataset, you can copy this class and modify the transforms to match your dataset based on the
-    comments below.
-    """
 
-    extra_delta_transform: bool = False
 
-    @override
-    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
-        # The repack transform is *only* applied to the data coming from the dataset,
-        # and *not* during inference. We can use it to make inputs from the dataset look
-        # as close as possible to those coming from the inference environment (e.g. match the keys).
-        # Below, we match the keys in the dataset (which we defined in the data conversion script) to
-        # the keys we use in our inference pipeline (defined in the inference script for libero).
-        # For your own dataset, first figure out what keys your environment passes to the policy server
-        # and then modify the mappings below so your dataset's keys get matched to those target keys.
-        # The repack transform simply remaps key names here.
-        repack_transform = _transforms.Group(
-            inputs=[
-                _transforms.RepackTransform(
-                    {
-                        "observation/image": "image",
-                        "observation/wrist_image": "wrist_image",
-                        "observation/state": "state",
-                        "actions": "actions",
-                        "prompt": "prompt",
-                    }
-                )
-            ]
-        )
 
-        # The data transforms are applied to the data coming from the dataset *and* during inference.
-        # Below, we define the transforms for data going into the model (``inputs``) and the transforms
-        # for data coming out of the model (``outputs``) (the latter is only used during inference).
-        # We defined these transforms in `libero_policy.py`. You can check the detailed comments there for
-        # how to modify the transforms to match your dataset. Once you created your own transforms, you can
-        # replace the transforms below with your own.
-        data_transforms = _transforms.Group(
-            inputs=[libero_policy.LiberoInputs(model_type=model_config.model_type)],
-            outputs=[libero_policy.LiberoOutputs()],
-        )
 
-        # One additional data transform: pi0 models are trained on delta actions (relative to the first
-        # state in each action chunk). IF your data has ``absolute`` actions (e.g. target joint angles)
-        # you can uncomment the following line to convert the actions to delta actions. The only exception
-        # is for the gripper actions which are always absolute.
-        # In the example below, we would apply the delta conversion to the first 6 actions (joints) and
-        # leave the 7th action (gripper) unchanged, i.e. absolute.
-        # In Libero, the raw actions in the dataset are already delta actions, so we *do not* need to
-        # apply a separate delta conversion (that's why it's commented out). Choose whether to apply this
-        # transform based on whether your dataset uses ``absolute`` or ``delta`` actions out of the box.
-
-        # LIBERO already represents actions as deltas, but we have some old Pi0 checkpoints that are trained with this
-        # extra delta transform.
-        if self.extra_delta_transform:
-            delta_action_mask = _transforms.make_bool_mask(6, -1)
-            data_transforms = data_transforms.push(
-                inputs=[_transforms.DeltaActions(delta_action_mask)],
-                outputs=[_transforms.AbsoluteActions(delta_action_mask)],
-            )
-
-        # Model transforms include things like tokenizing the prompt and action targets
-        # You do not need to change anything here for your own dataset.
-        model_transforms = ModelTransformFactory()(model_config)
-
-        # We return all data transforms for training and inference. No need to change anything here.
-        return dataclasses.replace(
-            self.create_base_config(assets_dirs, model_config),
-            repack_transforms=repack_transform,
-            data_transforms=data_transforms,
-            model_transforms=model_transforms,
-        )
 
 
 
 @dataclasses.dataclass(frozen=True)
-class LeRobotYuanluoDataConfig(DataConfigFactory):
+class LeRobotForceLDMDataConfig(DataConfigFactory):
     """
     Data config for the custom Yuanluo dataset.
     """
-
-    # Actions are absolute values, so no extra delta transform is needed.
-    extra_delta_transform: bool = False
-    delta_action_mask_size: int = 6
-    delta_action_mask_offset: int = -1
-    max_episodes: int | None = None  # None = 用全部
-    rcs_sample_enable: bool = False
-    
-
-    @override
-    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
-        repack_transform = _transforms.Group(
-            inputs=[
-                _transforms.RepackTransform(
-                    {
-                        ##lerobot
-                        "observation.images.head_camera": "observation.images.head_camera",
-                        "observation.images.wrist_left_camera": "observation.images.wrist_left_camera",
-                        # "observation.images.gelsight_left": "observation.images.gelsight_left",
-                        # "observation/gelsight_right": "leftarm_gelsight_right",
-                        # "observation/left_wrench": "left_wrench",
-                        "observation.state": "observation.state",
-                        "action": "action",
-                        "prompt": "task",
-                        
-                        ##tpy dataset
-                        # "observation/front_camera": "observation.images.front",
-                        # "observation/left_wrist_camera": "observation.images.left_wrist",
-                        # "observation/gelsight_left": "observation.images.gelsight_left",
-                        # # "observation/gelsight_right": "leftarm_gelsight_right",
-                        # # "observation/left_wrench": "left_wrench",
-                        # "observation/left_state": "observation.state",
-                        # "actions": "action",
-                        # # "prompt": "task",
-                    }
-                )
-            ]
-        )
-
-        data_transforms = _transforms.Group(
-            inputs=[yuanluo_policy.YuanluoInputs(model_type=model_config.model_type,state_dim=7)],
-            outputs=[yuanluo_policy.YuanluoOutputs()],
-        )
-
-        if self.extra_delta_transform:
-            delta_action_mask = _transforms.make_bool_mask(self.delta_action_mask_size, self.delta_action_mask_offset)
-            data_transforms = data_transforms.push(
-                inputs=[_transforms.DeltaActions(delta_action_mask)],
-                outputs=[_transforms.AbsoluteActions(delta_action_mask)],
-        )
-
-        model_transforms = ModelTransformFactory()(model_config)
-
-        return dataclasses.replace(
-            self.create_base_config(assets_dirs, model_config),
-            repack_transforms=repack_transform,
-            data_transforms=data_transforms,
-            model_transforms=model_transforms,
-            action_sequence_keys=("action",),
-            max_episodes = self.max_episodes
-        )
-
-@dataclasses.dataclass(frozen=True)
-class LeRobotTaVLADataConfig(DataConfigFactory):
-    """
-    Data config for the custom Yuanluo dataset.
-    """
+    # Configure RGB inputs independently of the future-flow supervision.
+    camera_mapping: dict[str, str] = dataclasses.field(
+        default_factory=lambda: {
+            "base_0_rgb": "observation.images.head_camera",
+            "left_wrist_0_rgb": "observation.images.wrist_left_camera",
+        }
+    )
     max_episodes: int | None = None  # None = 用全部
     rcs_sample_enable: bool = False
     use_delta_joint_actions: bool = True # 是否使用相对于当前frame 的action
@@ -379,81 +242,7 @@ class LeRobotTaVLADataConfig(DataConfigFactory):
             inputs=[
                 _transforms.RepackTransform(
                     {
-                        "observation.images.head_camera": "observation.images.head_camera",
-                        "observation.images.wrist_left_camera": "observation.images.wrist_left_camera",
-                        # "observation.images.gelsight_left": "observation.images.gelsight_left",
-                        "observation.state": "observation.state",
-                        "observation.effort": "observation.effort",
-                        "observation.is_contact": "observation.is_contact",
-                        "action": "action",
-                        "prompt": "task",
-                    }
-                )
-            ]
-        )
-
-        data_transforms = _transforms.Group(
-            inputs=[
-                yuanluo_policy.YuanluoTaVLAInputs(
-                    model_type=model_config.model_type,
-                    use_future_rgb_instead_of_flow=getattr(model_config, "use_future_rgb_instead_of_flow", False),
-                )
-            ], # here is the difference to parent class
-            outputs=[yuanluo_policy.YuanluoTaVLAOutputs()],
-        )
-
-        if self.use_delta_joint_actions:
-            delta_action_mask = _transforms.make_bool_mask(self.delta_action_mask_size, self.delta_action_mask_offset)
-            data_transforms = data_transforms.push(
-                inputs=[_transforms.DeltaActions(delta_action_mask)],
-                outputs=[_transforms.AbsoluteActions(delta_action_mask)],
-            )
-
-        if self.default_prompt and isinstance(self.repo_id, list):
-            raise ValueError("Using default prompt when using multiple dataset is incorrect.")
-        
-        model_transforms = ModelTransformFactory(default_prompt=self.default_prompt)(model_config)
-
-        return dataclasses.replace(
-            self.create_base_config(assets_dirs, model_config),
-            repack_transforms=repack_transform,
-            data_transforms=data_transforms,
-            model_transforms=model_transforms,
-            action_sequence_keys=("action",),
-            effort_history=self.effort_history,
-            prompt_from_task=(self.default_prompt is None),
-            max_episodes = self.max_episodes,
-            rcs_sample_enable = self.rcs_sample_enable
-        )
-
-
-
-@dataclasses.dataclass(frozen=True)
-class LeRobotOptimalFlowDataConfig(DataConfigFactory):
-    """
-    Data config for the custom Yuanluo dataset.
-    """
-    max_episodes: int | None = None  # None = 用全部
-    rcs_sample_enable: bool = False
-    use_delta_joint_actions: bool = True # 是否使用相对于当前frame 的action
-    delta_action_mask_size: int = 6
-    delta_action_mask_offset: int = -1
-
-    default_prompt: str | None = None
-    padding_stat: bool = False
-    # Actions are absolute values, so no extra delta transform is needed.
-    extra_delta_transform: bool = False
-    effort_history: Sequence[int] = ()
-    repack_transforms: tyro.conf.Suppress[_transforms.Group] = dataclasses.field(default=_transforms.Group())
-    action_sequence_keys: Sequence[str] = ("action",)
-    @override
-    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
-        repack_transform = _transforms.Group(
-            inputs=[
-                _transforms.RepackTransform(
-                    {
-                        "observation.images.head_camera": "observation.images.head_camera",
-                        "observation.images.wrist_left_camera": "observation.images.wrist_left_camera",
+                        **{key: key for key in self.camera_mapping.values()},
                         "observation.images.future_flow": "observation.future_flow.base_0_rgb",
                         "observation.images.future_wrist_flow": "observation.future_flow.left_wrist_0_rgb",
                         "observation.state": "observation.state",
@@ -468,12 +257,12 @@ class LeRobotOptimalFlowDataConfig(DataConfigFactory):
 
         data_transforms = _transforms.Group(
             inputs=[
-                yuanluo_policy.YuanluoTaVLAInputs(
+                yuanluo_policy.ForceLDMInputs(
                     model_type=model_config.model_type,
-                    use_future_rgb_instead_of_flow=getattr(model_config, "use_future_rgb_instead_of_flow", False),
+                    camera_mapping=self.camera_mapping,
                 )
             ], # here is the difference to parent class
-            outputs=[yuanluo_policy.YuanluoTaVLAOutputs()],
+            outputs=[yuanluo_policy.ForceLDMOutputs()],
         )
 
         if self.use_delta_joint_actions:
@@ -616,120 +405,9 @@ class TrainConfig:
 
 # Use `get_config` if you need to get a config by name in your code.
 _CONFIGS = [
-     TrainConfig(
-        # Change the name to reflect your model and dataset.
-        name="pi0_libero",
-        # Here you define the model config -- In this example we use pi0 as the model
-        # architecture and perform *full* finetuning. in the examples below we show how to modify
-        # this to perform *low-memory* (LORA) finetuning and use pi0-FAST as an alternative architecture.
-        model=pi0_config.Pi0Config(action_horizon=10),
-        # Here you define the dataset you are training odddn. In this example we use the Libero
-        # dataset. For your own dataset, you can change the repo_id to point to your dataset.
-        # Also modify the DataConfig to use the new config you made for your dataset above.
-        data=LeRobotLiberoDataConfig(
-            repo_id="physical-intelligence/libero",
-            base_config=DataConfig(
-                # This flag determines whether we load the prompt (i.e. the task instruction) from the
-                # ``task`` field in the LeRobot dataset. If set to True, the prompt will show up in
-                # a field called ``prompt`` in the input dict. The recommended setting is True.
-                prompt_from_task=True,
-            ),
-            extra_delta_transform=False, # The physical-intelligent/libero dataset already uses the delta action, so no additional transformation is needed.
-        ),
-        # Here you define which pre-trained checkpoint you want to load to initialize the model.
-        # This should match the model config you chose above -- i.e. in this case we use the pi0 base model.
-        # weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
-        weight_loader=weight_loaders.CheckpointWeightLoader("checkpoints/pi0_base/params"),
-        # Below you can define other hyperparameters like the learning rate, number of training steps, etc.
-        # Check the base TrainConfig class for a full list of available hyperparameters.
-        num_train_steps=30_000,
-        save_interval=10000,
-        keep_period=10000,
-        # ema_decay=None, # 开启以节约显存
-    ),
     TrainConfig(
-        name="pi0_seer_0409",
-        model=pi0_config.Pi0SeerConfig(
-            action_horizon=32,
-            effort_type=EffortType.EXPERT_HIS_C_FUT,
-            effort_dim=6,
-            foreseen_token_count_per_view=10,
-            future_rgb_step=32,
-            image_decoder_patch_size=16,
-            image_decoder_input_size=224,
-            future_image_loss_weight=0.1,
-            use_future_rgb_instead_of_flow=True,
-        ),
-        data=LeRobotTaVLADataConfig(
-            repo_id="llly/all_0409_stage_flow",
-            effort_history=tuple((4 * i - 36 for i in range(10))),
-            base_config=DataConfig(
-                prompt_from_task=True,
-            ),
-            extra_delta_transform=False,
-        ),
-        weight_loader=weight_loaders.CheckpointWeightLoader("checkpoints/pi0_base/params"),
-        num_train_steps=30_000,
-        batch_size=16,
-        save_interval=15000,
-        keep_period=15000,
-    ),
-     TrainConfig(
-        name="pi0_tavla_0409",
-        model=pi0_config.Pi0TaVLAConfig(
-            action_horizon=32,
-            # effort_type=EffortType.EXPERT_HIS_C,
-            effort_type=EffortType.EXPERT_HIS_C_FUT,
-            effort_dim=6,  # 6-axis force sensor
-        ),
-        data=LeRobotTaVLADataConfig(
-            # repo_id="llly/all_0409", # Placeholder, replace with your actual repo_id
-            repo_id="llly/vga_0525", # Placeholder, replace with your actual repo_id
-            effort_history=tuple((4*i-36 for i in range(10))), # sample 10 frames in 2s, assume fps =20
-            base_config=DataConfig(
-                prompt_from_task=True,
-            ),
-            extra_delta_transform=False, # Yuanluo actions are absolute
-        ),
-        weight_loader=weight_loaders.CheckpointWeightLoader("checkpoints/pi0_base/params"),
-        num_train_steps=30_000, # Default to 30k steps, adjust as needed
-        # num_workers=8,
-        batch_size=16,
-        save_interval=15000,
-        keep_period=15000,
-        # ema_decay = None # 节省显存
-    ),
-    TrainConfig(
-        name="pi0_latent_flow",
-        model=pi0_config.Pi0LatentFlowConfig(
-            action_horizon=32,
-            effort_type=EffortType.MOT,
-            effort_dim=6,  # 6-axis force sensor
-            # new parms
-            force_input_frames=10,
-            distill_layer_indices=(8, 12, 16),
-            future_force_align_loss_weight=0.5,
-            future_flow_align_loss_weight=0.5,
-        ),
-        data=LeRobotOptimalFlowDataConfig(
-            repo_id="llly/all_0409_stage_flow", # Placeholder, replace with your actual repo_id
-            effort_history=tuple(list((4 * i - 36 for i in range(10))) + list(range(1, 33))),
-            base_config=DataConfig(
-                prompt_from_task=True,
-            ),
-            extra_delta_transform=False, # Yuanluo actions are absolute
-        ),
-        weight_loader=weight_loaders.CheckpointWeightLoader("checkpoints/pi0_base/params"),
-        num_train_steps=30_000, # Default to 30k steps, adjust as needed
-        # num_workers=8,
-        batch_size=16,
-        save_interval=15000,
-        keep_period=15000,
-        ema_decay = None # 节省显存
-    ),
-    TrainConfig(
-        name="pi0_latent_flow_multiview",
-        model=pi0_config.Pi0LatentFlowConfig(
+        name="pi0_forceldm",
+        model=pi0_config.Pi0ForceLDMConfig(
             action_horizon=32,
             effort_type=EffortType.MOT,
             effort_dim=6,  # 6-axis force sensor
@@ -737,9 +415,13 @@ _CONFIGS = [
             distill_layer_indices=(8, 12, 16),
             future_force_align_loss_weight=0.5,
             future_flow_align_loss_weight=0.5,
-            use_future_rgb_instead_of_flow = False
         ),
-        data=LeRobotOptimalFlowDataConfig(
+        data=LeRobotForceLDMDataConfig(
+            camera_mapping={
+                "base_0_rgb": "observation.images.head_camera",
+                "left_wrist_0_rgb": "observation.images.wrist_left_camera",
+                # "right_wrist_0_rgb": "observation.images.wrist_right_camera",
+            },
             # This multiview config expects both
             # `observation.future_flow.base_0_rgb` and
             # `observation.future_flow.left_wrist_0_rgb` in the dataset.
@@ -751,7 +433,7 @@ _CONFIGS = [
             extra_delta_transform=False, # Yuanluo actions are absolute
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("checkpoints/pi0_base/params"),
-        # weight_loader=weight_loaders.CheckpointWeightLoader("checkpoints/pi0_latent_flow_multiview/pi0_latent_flow_multiview/29999/params"),
+        # weight_loader=weight_loaders.CheckpointWeightLoader("checkpoints/pi0_forceldm/pi0_forceldm/29999/params"),
         num_train_steps=30_000, # Default to 30k steps, adjust as needed
         # num_workers=8,
         batch_size=16,
@@ -760,44 +442,11 @@ _CONFIGS = [
         ema_decay = None # 节省显存
     ),
     TrainConfig(
-        name="pi0_latent_rgb_multiview",
-        model=pi0_config.Pi0LatentFlowConfig(
+        name="pi0_forceldm_noise",
+        model=pi0_config.Pi0ForceLDMConfig(
             action_horizon=32,
             effort_type=EffortType.MOT,
             effort_dim=6,  # 6-axis force sensor
-            force_input_frames=10,
-            distill_layer_indices=(8, 12, 16),
-            future_force_align_loss_weight=0.5,
-            future_flow_align_loss_weight=0.5,
-            use_future_rgb_instead_of_flow = True
-        ),
-        data=LeRobotOptimalFlowDataConfig(
-            # This multiview config expects both
-            # `observation.future_flow.base_0_rgb` and
-            # `observation.future_flow.left_wrist_0_rgb` in the dataset.
-            repo_id="llly/all_0409_stage_flow", # Placeholder, replace with your actual repo_id
-            effort_history=tuple(list((4 * i - 36 for i in range(10))) + list(range(1, 33))),
-            base_config=DataConfig(
-                prompt_from_task=True,
-            ),
-            extra_delta_transform=False, # Yuanluo actions are absolute
-        ),
-        weight_loader=weight_loaders.CheckpointWeightLoader("checkpoints/pi0_base/params"),
-        # weight_loader=weight_loaders.CheckpointWeightLoader("checkpoints/pi0_latent_flow_multiview/pi0_latent_flow_multiview/29999/params"),
-        num_train_steps=30_000, # Default to 30k steps, adjust as needed
-        # num_workers=8,
-        batch_size=16,
-        save_interval=15000,
-        keep_period=15000,
-        ema_decay = None # 节省显存
-    ),
-    TrainConfig(
-        name="pi0_latent_flow_noise",
-        model=pi0_config.Pi0LatentFlowConfig(
-            action_horizon=32,
-            effort_type=EffortType.MOT,
-            effort_dim=6,  # 6-axis force sensor
-            # new parms
             force_input_frames=10,
             distill_layer_indices=(8, 12, 16),
             future_force_align_loss_weight=0.5,
@@ -805,10 +454,17 @@ _CONFIGS = [
             student_future_query_noise_scale_max=0.3,
             student_future_query_noise_start_ratio=0.3,
             student_future_query_noise_end_ratio=0.7,
-            use_future_rgb_instead_of_flow = False
         ),
-        data=LeRobotOptimalFlowDataConfig(
-            repo_id="llly/all_0409_stage_flow", # Placeholder, replace with your actual repo_id
+        data=LeRobotForceLDMDataConfig(
+            camera_mapping={
+                "base_0_rgb": "observation.images.head_camera",
+                "left_wrist_0_rgb": "observation.images.wrist_left_camera",
+                # "right_wrist_0_rgb": "observation.images.wrist_right_camera",
+            },
+            # This multiview config expects both
+            # `observation.future_flow.base_0_rgb` and
+            # `observation.future_flow.left_wrist_0_rgb` in the dataset.
+            repo_id="PeiYuan001/forceldm-dataset",
             effort_history=tuple(list((4 * i - 36 for i in range(10))) + list(range(1, 33))),
             base_config=DataConfig(
                 prompt_from_task=True,
@@ -817,36 +473,6 @@ _CONFIGS = [
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("checkpoints/pi0_base/params"),
         num_train_steps=30_000, # Default to 30k steps, adjust as needed
-        # num_workers=8,
-        batch_size=16,
-        save_interval=15000,
-        keep_period=15000,
-        ema_decay = None # 节省显存
-    ),
-    TrainConfig(
-        name="pi0_latent_future_rgb",
-        model=pi0_config.Pi0LatentFlowConfig(
-            action_horizon=32,
-            effort_type=EffortType.MOT,
-            effort_dim=6,  # 6-axis force sensor
-            force_input_frames=10,
-            distill_layer_indices=(8, 12, 16),
-            future_force_align_loss_weight=0.5,
-            future_flow_align_loss_weight=0.5,
-            use_future_rgb_instead_of_flow=True,
-            future_rgb_step=32,
-        ),
-        data=LeRobotOptimalFlowDataConfig(
-            repo_id="llly/all_0409_stage_flow", # Placeholder, replace with your actual repo_id
-            effort_history=tuple(list((4 * i - 36 for i in range(10))) + list(range(1, 33))),
-            base_config=DataConfig(
-                prompt_from_task=True,
-            ),
-            extra_delta_transform=False, # Yuanluo actions are absolute
-        ),
-        weight_loader=weight_loaders.CheckpointWeightLoader("checkpoints/pi0_base/params"),
-        num_train_steps=30_000, # Default to 30k steps, adjust as needed
-        # num_workers=8,
         batch_size=16,
         save_interval=15000,
         keep_period=15000,

@@ -16,7 +16,7 @@ import optax
 import tqdm_loggable.auto as tqdm
 import wandb
 # import openpi.models.model as _model # bug, 添加这一行会莫名奇妙地退出，
-# import openpi.models.model_tavla as _model # bug, 添加这一行会莫名奇妙地退出，
+# import openpi.models.model_forceldm as _model # bug, 添加这一行会莫名奇妙地退出，
 import openpi.shared.array_typing as at
 import openpi.shared.nnx_utils as nnx_utils
 import openpi.training.config as _config
@@ -141,7 +141,7 @@ def _preload_model_assets(config: _config.TrainConfig) -> None:
     if flow_vae_name is None:
         return
 
-    from openpi.models.pi0_latent_flow import preload_flow_vae
+    from openpi.models.pi0_forceldm import preload_flow_vae
 
     logging.info("Preloading flow VAE '%s' before model initialization.", flow_vae_name)
     preload_flow_vae(flow_vae_name)
