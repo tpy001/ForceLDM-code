@@ -1,6 +1,7 @@
 <h1 align="center">ForceLDM: A Force-aware Latent Dynamics Model for Contact-Rich Manipulation</h1>
 
 <p align="center">
+  <a href="https://tpy001.github.io/ForceLDM/"><img src="https://img.shields.io/badge/Project-Page-3273DC?logo=googlechrome&amp;logoColor=white" alt="ForceLDM project page"></a>
   <a href="https://huggingface.co/datasets/PeiYuan001/forceldm-dataset"><img src="https://img.shields.io/badge/Data-Hugging%20Face-FFD21E?logo=huggingface&amp;logoColor=black" alt="Data on Hugging Face"></a>
   <a href="https://github.com/tpy001/forcewam-275ab3be/tree/forceldm"><img src="https://img.shields.io/badge/Code-GitHub-181717?logo=github&amp;logoColor=white" alt="Code on GitHub"></a>
   <!-- Add the arXiv URL here when the paper is available. -->
