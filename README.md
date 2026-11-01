@@ -1,82 +1,221 @@
-# pi0_forceldm
+<h1 align="center">ForceLDM: A Force-aware Latent Dynamics Model for Contact-Rich Manipulation</h1>
 
-**pi0_forceldm** 是基于 openpi / π0 的双专家模型，使用未来力与双视角光流进行蒸馏。数据集为 [PeiYuan001/forceldm-dataset](https://huggingface.co/datasets/PeiYuan001/forceldm-dataset)。
+<p align="center">
+  <a href="https://huggingface.co/datasets/PeiYuan001/forceldm-dataset"><img src="https://img.shields.io/badge/Data-Hugging%20Face-FFD21E?logo=huggingface&amp;logoColor=black" alt="Data on Hugging Face"></a>
+  <a href="https://github.com/tpy001/forcewam-275ab3be/tree/forceldm"><img src="https://img.shields.io/badge/Code-GitHub-181717?logo=github&amp;logoColor=white" alt="Code on GitHub"></a>
+  <!-- Add the arXiv URL here when the paper is available. -->
+  <img src="https://img.shields.io/badge/arXiv-Coming%20soon-B31B1B?logo=arxiv&amp;logoColor=white" alt="arXiv paper coming soon" title="Paper link coming soon">
+</p>
 
-环境安装、固定依赖和权重、数据下载、归一化、单卡训练、离线 W&B 以及实际问题见 [复现指南](README_REPRODUCE.md)。
+A pi0-based student–teacher policy built on [openpi](https://github.com/Physical-Intelligence/openpi). The teacher uses future force and optical flow during training. Inference uses current RGB, robot state, and force history.
 
-基础训练配置为 `pi0_forceldm`：batch size 16，30,000 步，action horizon 32，EMA 关闭，学生 future-query 噪声关闭。
+## Installation
 
-噪声实验配置为 `pi0_forceldm_noise`：学生 future-query 噪声最大强度为 0.3，在训练进度 30%～70% 线性增加，之后维持 0.3。30,000 步时约前 9,000 步不加噪，9,000～21,000 步逐渐增加；其他超参数与基础配置相同。
-
-```bash
-# 数据与归一化处理相同，可以复用基础配置已经计算好的统计。
-mkdir -p assets/pi0_forceldm_noise/PeiYuan001/forceldm-dataset
-cp assets/pi0_forceldm/PeiYuan001/forceldm-dataset/norm_stats.json \
-   assets/pi0_forceldm_noise/PeiYuan001/forceldm-dataset/norm_stats.json
-
-WANDB_MODE=offline CUDA_VISIBLE_DEVICES=0 XLA_PYTHON_CLIENT_MEM_FRACTION=0.90 \
-python scripts/train.py pi0_forceldm_noise \
-  --exp-name forceldm_noise_seed42 --seed 42 \
-  --model.flow-vae-name checkpoints/sdxl-vae --log-interval 100
-```
-
-EMA 功能完整保留，包括配置、权重更新以及 checkpoint 保存和恢复；当前配置的 `ema_decay=None` 仅表示本次实验关闭，可通过 `--ema-decay 0.99` 开启。
+Use Linux, an NVIDIA GPU, and Python 3.11–3.12. Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then:
 
 ```bash
-# 先按复现指南准备环境、数据、基础权重、SDXL VAE 和归一化统计。
-# 在已经分配的 GPU 上执行；每次新实验使用不同名称。
-WANDB_MODE=offline CUDA_VISIBLE_DEVICES=0 XLA_PYTHON_CLIENT_MEM_FRACTION=0.90 \
-python scripts/train.py pi0_forceldm \
-  --exp-name forceldm_multiview --seed 42 \
-  --model.flow-vae-name checkpoints/sdxl-vae --log-interval 100
+git clone --branch forceldm https://github.com/tpy001/forcewam-275ab3be.git
+cd forcewam-275ab3be
+sudo apt-get install -y ffmpeg libgl1 libegl1 libglib2.0-0
+GIT_LFS_SKIP_SMUDGE=1 uv sync --locked --python 3.12
+source .venv/bin/activate
 ```
 
-总 loss 为学生 action loss + 教师 action loss + 0.5 × force distillation loss + 0.5 × flow distillation loss。两种蒸馏分别归一化后加权。
+Use the pinned LeRobot version in `uv.lock`.
 
-保留的入口：
+## Model weights
 
-- `scripts/train.py`：训练与 checkpoint 恢复（`--resume`）。
-- `scripts/compute_norm_stats.py`、`scripts/compute_norm_stats_no_video.py`：归一化统计。
-- `scripts/compute_lerobot_future_flow_video.py`、`scripts/add_flow_videos_to_lerobot.py`、`scripts/add_force.py`：力/光流数据准备；指定数据集已提供这些字段，无需重复处理。
-- `scripts/serve_policy.py`：通过指定 config 和 checkpoint 提供策略服务。
+Download the pi0 base checkpoint, tokenizer, and flow VAE:
 
 ```bash
-python scripts/serve_policy.py \
-  --policy.config pi0_forceldm \
-  --policy.dir checkpoints/pi0_forceldm/forceldm_multiview/15000
+mkdir -p checkpoints
+python - <<'PY'
+import gcsfs
+from huggingface_hub import snapshot_download
+from openpi.shared import download
+
+fs = gcsfs.GCSFileSystem(token="anon", session_kwargs={"trust_env": True})
+fs.get("openpi-assets/checkpoints/pi0_base", "checkpoints/pi0_base", recursive=True)
+download.maybe_download("gs://big_vision/paligemma_tokenizer.model")
+snapshot_download(
+    "stabilityai/sdxl-vae",
+    revision="6f5909a7e596173e25d4e97b07fd19cdf9611c76",
+    allow_patterns=["config.json", "diffusion_pytorch_model.bin"],
+    local_dir="checkpoints/sdxl-vae",
+)
+PY
 ```
 
-代码源自 [Physical Intelligence openpi](https://github.com/Physical-Intelligence/openpi) 和 USTC forceWAM 分支。许可证见 [LICENSE](LICENSE)。
+## Data preparation
 
-## 两路或三路 RGB 相机
+### Download the prepared dataset
 
-在所用训练配置的 `data=LeRobotForceLDMDataConfig(...)` 中配置 `camera_mapping`。键是模型相机槽位，值是数据集 / 推理输入中的实际字段名。默认保持头部和左腕两路；三路示例：
+[PeiYuan001/forceldm-dataset](https://huggingface.co/datasets/PeiYuan001/forceldm-dataset) already contains force and flow fields. Download it and proceed to normalization:
+
+```bash
+python - <<'PY'
+from pathlib import Path
+from huggingface_hub import snapshot_download
+
+snapshot_download(
+    "PeiYuan001/forceldm-dataset", repo_type="dataset",
+    revision="ee424c789ee8e43c95d34d08ba88c9f6b39870f6",
+    local_dir=Path("~/.cache/huggingface/lerobot/PeiYuan001/forceldm-dataset").expanduser(),
+)
+PY
+```
+
+### Prepare your own dataset
+
+Convert synchronized recordings to LeRobot v2.1 at `~/.cache/huggingface/lerobot/<owner>/<dataset>`. Include episode/task metadata, FPS, trajectory Parquet files, and camera videos. A raw-recording converter is not included. The source data needs RGB, state, actions, and calibrated wrench measurements:
+
+| Field | Default format |
+| --- | --- |
+| `observation.images.head_camera` | Head/external RGB |
+| `observation.images.wrist_left_camera` | Wrist RGB |
+| `observation.state` | First 7 values used as robot state |
+| `action` | 7 values per frame |
+| `observation.effort` | Calibrated `[Fx, Fy, Fz, Mx, My, Mz]`, N/Nm |
+
+Task metadata provides the language prompt. Keep sensor timing, coordinate frames, and units consistent with deployment.
+
+If wrench measurements are stored inside the state vector, adapt and run:
+
+```bash
+python scripts/add_force.py --repo_id YOUR_ORG/YOUR_DATASET
+```
+
+This modifies the dataset in place and extracts wrench from `state[7:13]`; adjust the slice for your sensor. It does not perform calibration. The script also generates `observation.is_contact`, which is unused by the current model loss. If your dataset omits this label, remove its entry from the repack mapping in `LeRobotForceLDMDataConfig.create()`.
+
+### Compute optical flow
+
+Compute RAFT flow from frame `t` to `t+32`, clamped to the episode end:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python scripts/compute_lerobot_future_flow_video.py \
+  --repo-id YOUR_ORG/YOUR_DATASET --output-dir work/future_flow \
+  --image-keys observation.images.head_camera observation.images.wrist_left_camera \
+  --stream-names base_0_rgb left_wrist_0_rgb \
+  --future-step 32 --device cuda
+
+python scripts/add_flow_videos_to_lerobot.py \
+  --repo-id YOUR_ORG/YOUR_DATASET \
+  --flow-videos-dir work/future_flow/videos --mode copy
+```
+
+These commands generate and register `observation.future_flow.base_0_rgb` and `observation.future_flow.left_wrist_0_rgb`. They are preprocessing outputs, not required source fields. Both are needed for teacher training. Change image keys for your cameras. For a preview, use `--episodes 0 --limit-frames 16` with a separate output directory; register only complete videos.
+
+### Compute normalization
+
+After setting your dataset and robot transforms in the config:
+
+```bash
+JAX_PLATFORMS=cpu python scripts/compute_norm_stats.py --config-name pi0_forceldm
+```
+
+Statistics are saved under `assets/<config>/<dataset_id>/norm_stats.json`. Recompute after changing data, calibration, or transforms. Do not use LeRobot's `meta/stats.json` as model normalization.
+
+## Adapt to your robot
+
+Copy `pi0_forceldm` in [config.py](src/openpi/training/config.py) to a new config name and update:
+
+| Setting | Change |
+| --- | --- |
+| `repo_id` | Your LeRobot dataset ID |
+| `camera_mapping` | Model RGB slots → dataset/robot camera fields |
+| `LeRobotForceLDMDataConfig.create()` | Repack custom state, action, force, and generated flow keys; remove the contact entry if absent |
+| [ForceLDMInputs / ForceLDMOutputs](src/openpi/policies/yuanluo_policy.py) | State selection and action output; currently 7 dimensions |
+| `use_delta_joint_actions` / delta mask | Default: first 6 actions relative to state, last action absolute |
+| Model and effort settings | Action horizon, wrench dimension, history length and offsets |
+
+Camera mapping example:
 
 ```python
 camera_mapping={
-    "base_0_rgb": "observation.images.head_camera",
-    "left_wrist_0_rgb": "observation.images.wrist_left_camera",
-    "right_wrist_0_rgb": "observation.images.wrist_right_camera",
-},
+    "base_0_rgb": "observation.images.front_camera",
+    "left_wrist_0_rgb": "observation.images.wrist_camera",
+    # "right_wrist_0_rgb": "observation.images.side_camera",
+}
 ```
 
-第三路也可以来自侧面相机：将最后一行的值改为自己的字段名，例如 `observation.images.side_camera`。训练数据和推理输入须提供所配置的字段；缺失相机会报错。两路配置不会添加第三路占位图像。
+The default model pads state/actions to 32 dimensions. Training reads 32 action steps and wrench offsets `[-36,-32,...,-4,0,1,...,32]`: 10 history/current samples plus 32 future samples. Update offsets and flow timing together when changing FPS or horizon. Use the same config for normalization, training, and serving.
 
-第三路会经过重打包、resize、观测预处理和共享视觉编码，进入学生与教师共用的视觉前缀。相机数增加会增加视觉 token 数和显存需求。当前教师的未来光流监督仍使用头部和左腕两路；增加第三路当前 RGB 不要求增加第三路光流。
+## Training
 
-训练与推理使用同一份相机映射。模型内部支持的槽位为 `base_0_rgb`、`left_wrist_0_rgb`、`right_wrist_0_rgb`；槽位名称只作内部映射，实际相机字段名可自行配置。当前数据集只有两路 RGB，所以默认训练配置仍保留两路。
+### Single GPU
 
-## 单卡 80GB 配置验证（2026-11-01）
+```bash
+CUDA_VISIBLE_DEVICES=0 XLA_PYTHON_CLIENT_MEM_FRACTION=0.90 \
+python scripts/train.py pi0_forceldm \
+  --exp-name my_run --model.flow-vae-name checkpoints/sdxl-vae \
+  --batch-size 16 --fsdp-devices 1
+```
 
-目标配置为单卡 A100 80GB：默认两路 RGB、batch 16、FSDP 1、EMA 关闭，使用本指南的固定依赖、基础权重、SDXL VAE 和全量归一化统计。基础配置和 noise 配置已在单张 **A800-SXM4-80GB（SM 8.0）** 上完成以下短测；没有直接使用 A100 实测。
+Defaults: 30,000 steps, horizon 32, EMA disabled. Checkpoints go to `checkpoints/pi0_forceldm/my_run/<step>/`, saved every 15,000 steps. Add `--resume` to continue the same run. Use `--no-wandb-enabled` to disable W&B.
 
-| 配置 | batch | 优化步数 | nvidia-smi 采样峰值 | JAX 活跃分配峰值 |
-| --- | ---: | ---: | ---: | ---: |
-| `pi0_forceldm` | 16 | 3 | 71.97 GiB | 55.16 GiB |
-| `pi0_forceldm_noise` | 16 | 3 | 71.94 GiB | 55.21 GiB |
+### Multiple GPUs
 
-每种配置均执行完整前向、反向和优化器更新，3 步指标均为有限值，无 OOM。短测将总步数临时压缩为 3，以覆盖 noise 强度 0、0.15、0.3；仓库正式配置仍为 30,000 步，保留原 30%～70% 噪声调度。测试使用 `XLA_PYTHON_CLIENT_MEM_FRACTION=0.90`；nvidia-smi 数值包含 JAX 预分配，和活跃张量峰值口径不同。
+Use one JAX process with all GPUs visible:
 
-[NVIDIA 列出 A100 的计算能力为 8.0](https://developer.nvidia.com/cuda/gpus)，与本次实测 A800 的 SM 版本相同；结合相同的 80GB 显存，判断默认配置兼容单卡 A100 80GB。这是基于同架构运行结果的兼容性判断。三路 RGB 或开启 EMA 未纳入本次 GPU 显存验证；两路/三路映射及视觉 token、注意力连通性已有 7 项测试通过。
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 XLA_PYTHON_CLIENT_MEM_FRACTION=0.90 \
+python scripts/train.py pi0_forceldm \
+  --exp-name my_run_4gpu --model.flow-vae-name checkpoints/sdxl-vae \
+  --batch-size 16 --fsdp-devices 4
+```
 
-此次短测作业和 worker 均已结束，没有恢复原长训练。原 checkpoint、日志和离线 W&B 保留；没有上传训练 loss 或离线文件。
+Batch size is global and must be divisible by GPU count. `fsdp-devices` must divide GPU count: `1` replicates parameters; `4` shards across four GPUs. Multi-node training requires code changes.
+
+The optional `pi0_forceldm_noise` config adds student query noise. Compute its normalization with `--config-name pi0_forceldm_noise`, then substitute that config name in the training command.
+
+## Inference server
+
+Use an existing checkpoint step directory and its matching config:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python scripts/serve_policy.py \
+  --policy.config pi0_forceldm \
+  --policy.dir checkpoints/pi0_forceldm/my_run/15000 \
+  --port 8000
+```
+
+Install the client in the robot environment:
+
+```bash
+pip install -e packages/openpi-client
+```
+
+Call it with real sensor data:
+
+```python
+from openpi_client import websocket_client_policy
+
+policy = websocket_client_policy.WebsocketClientPolicy(host="SERVER_IP", port=8000)
+actions = policy.infer({
+    "observation.images.head_camera": head_rgb,        # uint8 HWC RGB
+    "observation.images.wrist_left_camera": wrist_rgb, # uint8 HWC RGB
+    "observation.state": state,                       # float32 (7,)
+    "observation.effort": wrench_history,             # float32 (10, 6)
+    "prompt": "Insert the plug into the socket.",
+})["actions"]                                         # (32, 7)
+```
+
+Use camera keys from your config. Wrench history follows `[-36,-32,...,-4,0]` at the training FPS; pad missing initial history with the earliest measurement. Future force and flow are unnecessary at inference. The robot runtime must execute the returned action chunk at the correct control rate and enforce controller limits.
+
+## Acknowledgments
+
+We thank [openpi](https://github.com/Physical-Intelligence/openpi) and [TA-VLA](https://github.com/ZZongzheng0918/TA-VLA) for their open-source contributions, which this project builds upon.
+
+## Citation
+
+If you find this work helpful, please consider citing our paper:
+
+```bibtex
+@inproceedings{tang2026forceldm,
+  title     = {Force{LDM}: A Force-aware Latent Dynamics Model for Contact-Rich Manipulation},
+  author    = {Tang, Peiyuan and Li, Yao and Zhang, Xiaodong and Zhang, Wuyang and Xia, Qin and Zhang, Yanyong and Yang, Zijiang James},
+  booktitle = {The Fortieth Annual Conference on Neural Information Processing Systems},
+  year      = {2026},
+  url       = {https://openreview.net/forum?id=0j9L12vSKx}
+}
+```
