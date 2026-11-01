@@ -8,7 +8,7 @@
   <img src="https://img.shields.io/badge/arXiv-Coming%20soon-B31B1B?logo=arxiv&amp;logoColor=white" alt="arXiv paper coming soon" title="Paper link coming soon">
 </p>
 
-A pi0-based student–teacher policy built on [openpi](https://github.com/Physical-Intelligence/openpi). The teacher uses future force and optical flow during training. Inference uses current RGB, robot state, and force history.
+**ForceLDM** is a force-aware latent dynamics model built on **π₀** for contact-rich manipulation. It distills future contact and motion dynamics from privileged force/torque and optical flow signals into a policy that acts using only current observations.
 
 ## Installation
 
